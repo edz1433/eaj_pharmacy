@@ -196,6 +196,7 @@ class SystemSetting extends Model
             ['key' => 'receipt.header_text',     'value' => 'Thank you for your purchase!', 'type' => 'string', 'group' => 'receipt', 'label' => 'Receipt header'],
             ['key' => 'receipt.footer_text',     'value' => 'Please come again.',    'type' => 'string',  'group' => 'receipt', 'label' => 'Receipt footer'],
             ['key' => 'receipt.show_cashier',    'value' => 'true',                  'type' => 'boolean', 'group' => 'receipt', 'label' => 'Show cashier name on receipt'],
+            ['key' => 'receipt.hide_product_names','value' => 'false',                'type' => 'boolean', 'group' => 'receipt', 'label' => 'Hide product names on receipt', 'description' => 'Replace medicine names with generic item labels on printed and downloaded receipts'],
             ['key' => 'receipt.show_vat_breakdown','value' => 'false',               'type' => 'boolean', 'group' => 'receipt', 'label' => 'Show VAT breakdown on receipt'],
             ['key' => 'receipt.copies',          'value' => '1',                     'type' => 'integer', 'group' => 'receipt', 'label' => 'Number of receipt copies'],
 

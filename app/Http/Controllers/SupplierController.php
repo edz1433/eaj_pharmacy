@@ -27,7 +27,6 @@ class SupplierController extends Controller
     {
         $validated = $request->validate([
             'name'           => 'required|string|max:255|unique:suppliers,name',
-            'is_campus'      => 'nullable|boolean',
             'phone'          => 'nullable|string|max:50',
             'address'        => 'nullable|string|max:255',
             'contact_person' => 'nullable|string|max:100',
@@ -39,7 +38,6 @@ class SupplierController extends Controller
 
         Supplier::create([
             'name'           => trim($validated['name']),
-            'is_campus'      => $validated['is_campus'] ?? false,
             'phone'          => $validated['phone'] ?? null,
             'address'        => $validated['address'] ?? null,
             'contact_person' => $validated['contact_person'] ?? null,
@@ -60,7 +58,6 @@ class SupplierController extends Controller
                 'max:255',
                 Rule::unique('suppliers', 'name')->ignore($supplier->id),
             ],
-            'is_campus'      => 'nullable|boolean',
             'phone'          => 'nullable|string|max:50',
             'address'        => 'nullable|string|max:255',
             'contact_person' => 'nullable|string|max:100',
@@ -72,7 +69,6 @@ class SupplierController extends Controller
 
         $supplier->update([
             'name'           => trim($validated['name']),
-            'is_campus'      => $validated['is_campus'] ?? $supplier->is_campus,
             'phone'          => $validated['phone'] ?? $supplier->phone,
             'address'        => $validated['address'] ?? $supplier->address,
             'contact_person' => $validated['contact_person'] ?? $supplier->contact_person,
@@ -88,7 +84,7 @@ class SupplierController extends Controller
     {
         $orders = Order::with([
                 'items' => fn($q) => $q->with(['product:id,name', 'variant:id,name']),
-                'branch.supplier:id,name,phone,address,contact_person,is_campus',
+                'branch.supplier:id,name,phone,address,contact_person',
             ])
             ->where('supplier_id', $supplier->id)
             ->latest()
@@ -108,7 +104,6 @@ class SupplierController extends Controller
                     'phone'          => $order->branch->supplier->phone,
                     'address'        => $order->branch->supplier->address,
                     'contact_person' => $order->branch->supplier->contact_person,
-                    'is_campus'      => $order->branch->supplier->is_campus,
                 ] : null,
                 'items' => $order->items->map(fn($item) => [
                     'name'     => $item->display_name,
@@ -120,7 +115,7 @@ class SupplierController extends Controller
 
         return Inertia::render('Suppliers/Orders', [
             'orders'   => $orders,
-            'supplier' => $supplier->only(['name', 'is_campus', 'phone', 'address', 'contact_person']),
+            'supplier' => $supplier->only(['name', 'phone', 'address', 'contact_person']),
         ]);
     }
 

@@ -113,6 +113,7 @@ class InventoryController extends Controller
             'low_stock'      => (clone $statsBase)->where('stock', '>', 0)->where('stock', '<=', 5)->count(),
             'out_of_stock'   => (clone $statsBase)->where('stock', '<=', 0)->count(),
             'expired'        => (clone $statsBase)->whereDate('expiry_date', '<', now())->count(),
+            'near_expiry'    => (clone $statsBase)->whereDate('expiry_date', '>=', now())->whereDate('expiry_date', '<=', now()->addDays(30))->count(),
             'warehouse_units'=> WarehouseStock::sum('stock'),
         ];
 

@@ -24,6 +24,31 @@ export interface Product {
     has_variants: boolean;
     bundle_items: BundleItem[] | null;
     recipe_items: RecipeItem[] | null;
+    expiry_date?: string | null;
+    batch_number?: string | null;
+    is_expired?: boolean;
+    is_near_expiry?: boolean;
+}
+
+export interface QueuedOrder {
+    id: number;
+    ticket_number: string;
+    qr_token: string;
+    customer_name: string | null;
+    status: string;
+    subtotal: number;
+    total: number;
+    expires_at: string | null;
+    listed_by: string | null;
+    items: {
+        product_id: number;
+        variant_id: number | null;
+        product_name: string;
+        variant_name: string | null;
+        quantity: number;
+        price: number;
+        total: number;
+    }[];
 }
 
 export interface Category { id: number; name: string; }

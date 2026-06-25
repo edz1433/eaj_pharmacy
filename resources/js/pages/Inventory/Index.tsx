@@ -5,7 +5,7 @@ import AdminLayout from "@/layouts/AdminLayout";
 import { routes } from "@/routes";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Package, Warehouse, ArrowLeftRight, AlertTriangle, TrendingDown, Search, X, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
+import { Package, Warehouse, ArrowLeftRight, AlertTriangle, TrendingDown, Search, X, ChevronLeft, ChevronRight, RefreshCw, Clock } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface StockRow {
@@ -27,7 +27,7 @@ interface StockRow {
     expiry_date: string | null;
     batch_number: string | null;
 }
-interface Stats { total_sku: number; low_stock: number; out_of_stock: number; expired: number; warehouse_units: number; }
+interface Stats { total_sku: number; low_stock: number; out_of_stock: number; expired: number; near_expiry: number; warehouse_units: number; }
 interface Branch { id: number; name: string; code: string; }
 interface Pagination { total: number; per_page: number; current_page: number; last_page: number; from: number | null; to: number | null; }
 interface PageProps {
@@ -115,11 +115,12 @@ export default function InventoryIndex({
                 )}
 
                 {/* Stats */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                     {[
                         { label: 'Total SKUs',      value: stats.total_sku,      icon: Package,       color: 'text-blue-400' },
                         { label: 'Low Stock',        value: stats.low_stock,      icon: AlertTriangle, color: 'text-yellow-400' },
                         { label: 'Out of Stock',     value: stats.out_of_stock,   icon: TrendingDown,  color: 'text-red-400' },
+                        { label: 'Near Expiry',      value: stats.near_expiry,    icon: Clock,         color: 'text-yellow-400' },
                         { label: 'Expired',          value: stats.expired,        icon: AlertTriangle, color: 'text-orange-400' },
                         { label: 'Warehouse Units',  value: stats.warehouse_units,icon: Warehouse,     color: 'text-purple-400' },
                     ].map(s => (

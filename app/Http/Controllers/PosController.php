@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\ProductBundle;
 use App\Models\RecipeIngredient;
 use App\Models\ProductStock;
+use App\Models\PosQueuedOrder;
 use App\Models\Promo;
 use App\Models\Sale;
 use App\Models\SystemSetting;
@@ -71,6 +72,7 @@ class PosController extends Controller
                     ->whereHas('stocks', fn ($s) => $s
                         ->where('branch_id', $branchId)
                         ->where('stock', '>', 0)
+                        ->where(fn ($x) => $x->whereNull('expiry_date')->orWhereDate('expiry_date', '>=', today()))
                     )
                 )
                 // Variant products: base stock may be 0 — include if any available variant exists
@@ -155,6 +157,13 @@ class PosController extends Controller
 
     // ─── Stock helpers ────────────────────────────────────────────────────────
 
+    private function assertStockIsSellable(?ProductStock $stock, string $name): void
+    {
+        if ($stock?->expiry_date && $stock->expiry_date->isPast()) {
+            throw new \RuntimeException("\"{$name}\" is expired and cannot be sold.");
+        }
+    }
+
     /**
      * Deduct stock for one product (standard, bundle, or MTO).
      * All relations must already be eager-loaded with lockForUpdate().
@@ -167,6 +176,7 @@ class PosController extends Controller
                 $cs     = $comp?->stocks->firstWhere('branch_id', $branchId);
                 $needed = $bi->quantity * $qty;
                 if (! $cs) throw new \RuntimeException("Bundle component \"{$comp?->name}\" has no stock in this branch.");
+                $this->assertStockIsSellable($cs, $comp?->name ?? 'Bundle component');
                 if (! $allowNeg && $cs->stock < $needed) throw new \RuntimeException("Insufficient stock for bundle component \"{$comp?->name}\". Need {$needed}, have {$cs->stock}.");
                 $cs->decrement('stock', $needed);
             }
@@ -178,18 +188,21 @@ class PosController extends Controller
                     $ingStock = $ing?->stocks->firstWhere('branch_id', $branchId);
                     $needed   = $recipe->quantityNeededFor($qty);
                     if (! $ingStock) throw new \RuntimeException("Ingredient \"{$ing?->name}\" has no stock in this branch.");
+                    $this->assertStockIsSellable($ingStock, $ing?->name ?? 'Ingredient');
                     if (! $allowNeg && $ingStock->stock < $needed) throw new \RuntimeException("Insufficient stock for ingredient \"{$ing?->name}\". Need {$needed}, have {$ingStock->stock}.");
                     $ingStock->decrement('stock', $needed);
                 }
             } else {
                 $stock = $product->stocks->firstWhere('branch_id', $branchId) ?? $product->stocks->first();
                 if (! $stock) throw new \RuntimeException("Product \"{$product->name}\" has no stock in this branch.");
+                $this->assertStockIsSellable($stock, $product->name);
                 if (! $allowNeg && $stock->stock < $qty) throw new \RuntimeException("Insufficient stock for \"{$product->name}\". Only {$stock->stock} left.");
                 $stock->decrement('stock', $qty);
             }
         } else {
             $stock = $product->stocks->firstWhere('branch_id', $branchId) ?? $product->stocks->first();
             if (! $stock) throw new \RuntimeException("Product \"{$product->name}\" has no stock in this branch.");
+            $this->assertStockIsSellable($stock, $product->name);
             if (! $allowNeg && $stock->stock < $qty) throw new \RuntimeException("Insufficient stock for \"{$product->name}\". Only {$stock->stock} left.");
             $stock->decrement('stock', $qty);
         }
@@ -231,6 +244,93 @@ class PosController extends Controller
 
     // ─── Store (checkout) ─────────────────────────────────────────────────────
 
+    public function queueOrder(Request $request): RedirectResponse
+    {
+        $user = Auth::user();
+        $branchId = $user->branch_id;
+        if (! $branchId) return back()->withErrors(['error' => 'No branch assigned.']);
+
+        $validated = $request->validate([
+            'items'              => ['required', 'array', 'min:1'],
+            'items.*.id'         => ['required', 'exists:products,id'],
+            'items.*.qty'        => ['required', 'integer', 'min:1'],
+            'items.*.variant_id' => ['nullable', 'exists:product_variants,id'],
+            'customer_name'      => ['nullable', 'string', 'max:80'],
+        ]);
+
+        try {
+            $order = DB::transaction(function () use ($validated, $user, $branchId) {
+                $subtotal = 0;
+                $lines = [];
+
+                foreach ($validated['items'] as $item) {
+                    $product = Product::with([
+                        'variants',
+                        'stocks' => fn ($q) => $q->where('branch_id', $branchId),
+                    ])->findOrFail($item['id']);
+
+                    $stock = $product->stocks->first();
+                    if (! $stock && ! in_array($product->product_type, ['bundle', 'made_to_order'], true)) {
+                        throw new \RuntimeException("Product \"{$product->name}\" has no stock in this branch.");
+                    }
+                    $this->assertStockIsSellable($stock, $product->name);
+
+                    $unitPrice = (float) ($stock?->price ?? 0);
+                    if (! empty($item['variant_id'])) {
+                        $variant = $product->variants->firstWhere('id', $item['variant_id']);
+                        if ($variant) $unitPrice += (float) $variant->extra_price;
+                    }
+
+                    $qty = (int) $item['qty'];
+                    $lineTotal = round($unitPrice * $qty, 2);
+                    $subtotal += $lineTotal;
+                    $lines[] = [
+                        'product_id' => $product->id,
+                        'product_variant_id' => $item['variant_id'] ?? null,
+                        'quantity' => $qty,
+                        'price' => $unitPrice,
+                        'total' => $lineTotal,
+                    ];
+                }
+
+                $order = PosQueuedOrder::create([
+                    'branch_id' => $branchId,
+                    'listed_by' => $user->id,
+                    'customer_name' => $validated['customer_name'] ?? null,
+                    'subtotal' => $subtotal,
+                    'total' => $subtotal,
+                    'status' => 'pending',
+                ]);
+
+                foreach ($lines as $line) $order->items()->create($line);
+
+                return $order->load(['items.product', 'items.variant', 'listedBy']);
+            });
+
+            return back()->with('queued_order', $this->mapQueuedOrder($order));
+        } catch (\Throwable $e) {
+            return back()->withErrors(['error' => $e->getMessage() ?: 'Unable to queue order.']);
+        }
+    }
+
+    public function queuedOrder(string $token): JsonResponse
+    {
+        $user = Auth::user();
+        $order = PosQueuedOrder::with(['items.product', 'items.variant', 'listedBy'])
+            ->where('qr_token', strtoupper(trim($token)))
+            ->first();
+
+        if (! $order || $order->branch_id !== $user->branch_id) {
+            return response()->json(['message' => 'Queued order not found.'], 404);
+        }
+
+        if (! $order->isPending()) {
+            return response()->json(['message' => 'This queued order is no longer pending.'], 422);
+        }
+
+        return response()->json(['order' => $this->mapQueuedOrder($order)]);
+    }
+
     public function store(Request $request): RedirectResponse
     {
         $user     = Auth::user();
@@ -260,6 +360,7 @@ class PosController extends Controller
             'promo_id'           => ['nullable', 'exists:promos,id'],
             'cash_session_id'    => ['nullable', 'exists:cash_sessions,id'],
             'table_order_id'     => ['nullable', 'exists:table_orders,id'],
+            'queued_order_id'    => ['nullable', 'exists:pos_queued_orders,id'],
             // Financing / installment fields (used when payment_method = installment)
             'installment_provider'        => ['nullable', 'in:home_credit,skyro,other'],
             'installment_reference'       => ['nullable', 'string', 'max:100'],
@@ -280,7 +381,19 @@ class PosController extends Controller
         }
 
         try {
-            $result = DB::transaction(function () use ($validated, $user, $branchId) {
+            $result = DB::transaction(function () use ($validated, $user, $branchId, $openSession) {
+                $queuedOrder = null;
+                if (! empty($validated['queued_order_id'])) {
+                    $queuedOrder = PosQueuedOrder::where('id', $validated['queued_order_id'])
+                        ->where('branch_id', $branchId)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+
+                    if (! $queuedOrder->isPending()) {
+                        throw new \RuntimeException('This queued order has already been processed or expired.');
+                    }
+                }
+
                 $allowNeg = (bool) SystemSetting::get('inventory.allow_negative_stock', $branchId, false);
                 $subtotal         = 0;
                 $taxableSubtotal  = 0;
@@ -385,6 +498,15 @@ class PosController extends Controller
                         ->update(['status' => 'closed', 'sale_id' => $sale->id]);
                 }
 
+                if ($queuedOrder) {
+                    $queuedOrder->update([
+                        'status' => 'processed',
+                        'processed_by' => $user->id,
+                        'sale_id' => $sale->id,
+                        'processed_at' => now(),
+                    ]);
+                }
+
                 // ── Create financing record if payment method is installment ──
                 $installmentPlanId = null;
                 if ($isInstallment) {
@@ -429,6 +551,8 @@ class PosController extends Controller
                     'installment_plan_id'=> $installmentPlanId,
                     'is_installment'     => $isInstallment,
                     'down_payment'       => $isInstallment ? ($downPayment ?? 0) : null,
+                    'queued_order_id'    => $queuedOrder?->id,
+                    'hide_product_names' => (bool) SystemSetting::get('receipt.hide_product_names', $branchId, false),
                 ];
             });
 
@@ -723,11 +847,41 @@ class PosController extends Controller
                     'unit'     => $r->unit,
                 ])->values()
                 : null,
+            'expiry_date'    => $stock?->expiry_date?->toDateString(),
+            'batch_number'   => $stock?->batch_number,
+            'is_expired'     => (bool) ($stock?->expiry_date?->isPast() ?? false),
+            'is_near_expiry' => (bool) ($stock?->isNearExpiry() ?? false),
+        ];
+    }
+
+    private function mapQueuedOrder(PosQueuedOrder $order): array
+    {
+        return [
+            'id'            => $order->id,
+            'ticket_number' => $order->ticket_number,
+            'qr_token'      => $order->qr_token,
+            'customer_name' => $order->customer_name,
+            'status'        => $order->status,
+            'subtotal'      => (float) $order->subtotal,
+            'total'         => (float) $order->total,
+            'expires_at'    => $order->expires_at?->toIso8601String(),
+            'listed_by'     => $order->listedBy ? trim("{$order->listedBy->fname} {$order->listedBy->lname}") : null,
+            'items'         => $order->items->map(fn ($item) => [
+                'product_id'   => $item->product_id,
+                'variant_id'   => $item->product_variant_id,
+                'product_name' => $item->product?->name ?? 'Unknown',
+                'variant_name' => $item->variant?->name,
+                'quantity'     => (int) $item->quantity,
+                'price'        => (float) $item->price,
+                'total'        => (float) $item->total,
+            ])->values(),
         ];
     }
 
     private function mapSale(Sale $sale, bool $brief = false): array
     {
+        $hideProductNames = (bool) SystemSetting::get('receipt.hide_product_names', $sale->branch_id, false);
+
         $base = [
             'id'              => $sale->id,
             'receipt_number'  => $sale->receipt_number,
@@ -743,6 +897,7 @@ class PosController extends Controller
             'cashier'         => $sale->user ? trim("{$sale->user->fname} {$sale->user->lname}") : 'Unknown',
             'table_order_id'  => $sale->table_order_id,
             'table_label'     => $sale->tableOrder?->table?->label,
+            'hide_product_names' => $hideProductNames,
         ];
 
         $base['items'] = $brief

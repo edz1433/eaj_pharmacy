@@ -157,6 +157,7 @@ class HandleInertiaRequests extends Middleware
                 'receipt_header'          =>        SystemSetting::get('receipt.header_text',        $branchId, ''),
                 'receipt_footer'          =>        SystemSetting::get('receipt.footer_text',        $branchId, ''),
                 'show_cashier_on_receipt' => (bool) SystemSetting::get('receipt.show_cashier',       $branchId, true),
+                'hide_product_names_on_receipt' => (bool) SystemSetting::get('receipt.hide_product_names', $branchId, false),
                 'receipt_copies'          => (int)  SystemSetting::get('receipt.copies',             $branchId, 1),
 
                 // Inventory alerts

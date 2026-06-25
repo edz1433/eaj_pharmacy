@@ -5,7 +5,7 @@
         <meta name="csrf-token" content="{{ csrf_token() }}">
         <meta name="viewport" content="width=device-width, initial-scale=1">
 
-        <title inertia>{{ config('app.name', 'EAJ') }}</title>
+        <title inertia>{{ config('app.name', 'FND') }}</title>
 
         <!-- Icons -->
         <link rel="icon" href="{{ asset('uploads/ease-icon.png') }}" sizes="any">

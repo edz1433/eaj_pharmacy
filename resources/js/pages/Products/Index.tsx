@@ -25,6 +25,7 @@ interface StockRecord {
     status: string;
     expiry_date: string | null;
     batch_number: string | null;
+    days_before_expiry_warning: number | null;
 }
 
 interface Variant {
@@ -131,6 +132,7 @@ interface StockRow {
     status: string;
     expiry_date: string | null;
     batch_number: string | null;
+    days_before_expiry_warning: number | null;
 }
 
 interface Pagination {
@@ -155,7 +157,7 @@ interface PageProps {
     products: Product[];
     pagination: Pagination;
     filters: { search: string; category_id: number | null; type: string; status: string; per_page: number; branch_id: number | null; };
-    stats: { total_products: number; total_units: number; low_stock: number; out_of_stock: number; };
+    stats: { total_products: number; total_units: number; low_stock: number; out_of_stock: number; expired: number; near_expiry: number; };
     variantProducts: VariantProduct[];
     bundleProducts: BundleProduct[];
     recipeProducts: RecipeProduct[];
@@ -199,9 +201,9 @@ const sel = inp;
 // ─── Debounce hook ────────────────────────────────────────────────────────────
 
 function useDebounce(fn: (...args: any[]) => void, delay: number) {
-    const timer = useRef<ReturnType<typeof setTimeout>>();
+    const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
     return useCallback((...args: any[]) => {
-        clearTimeout(timer.current);
+        if (timer.current) clearTimeout(timer.current);
         timer.current = setTimeout(() => fn(...args), delay);
     }, [fn, delay]);
 }
@@ -595,6 +597,9 @@ function StockAdjustModal({ item, onClose }: {
         stock:     item?.stock.stock.toString() ?? '',
         capital:   item?.stock.capital.toString() ?? '',
         markup:    item?.stock.markup.toString() ?? '',
+        expiry_date: item?.stock.expiry_date ?? '',
+        batch_number: item?.stock.batch_number ?? '',
+        days_before_expiry_warning: item?.stock.days_before_expiry_warning?.toString() ?? '30',
     });
 
     if (!item) return null;
@@ -648,6 +653,18 @@ function StockAdjustModal({ item, onClose }: {
                             </Field>
                         </>
                     )}
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                    <Field label="Expiry Date" error={errors.expiry_date}>
+                        <input type="date" className={inp} value={data.expiry_date} onChange={e => setData('expiry_date', e.target.value)} />
+                    </Field>
+                    <Field label="Batch No." error={errors.batch_number}>
+                        <input className={inp} value={data.batch_number} onChange={e => setData('batch_number', e.target.value)} placeholder="Optional" />
+                    </Field>
+                    <Field label="Warn Days" error={errors.days_before_expiry_warning}>
+                        <input type="number" min="0" max="3650" className={inp} value={data.days_before_expiry_warning} onChange={e => setData('days_before_expiry_warning', e.target.value)} />
+                    </Field>
                 </div>
 
                 {/* Price preview — only for non-bundles */}
@@ -755,12 +772,14 @@ function AllProductsTab({ products, pagination, filters, stats, categories, bran
     return (
         <div className="space-y-5">
             {/* Stats */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
                 {[
                     { label: 'Total Products', value: stats.total_products.toLocaleString(), color: 'text-foreground' },
                     { label: 'Total Units',    value: stats.total_units.toLocaleString(),    color: 'text-foreground' },
                     { label: 'Low Stock',      value: stats.low_stock,                       color: 'text-amber-400' },
                     { label: 'Out of Stock',   value: stats.out_of_stock,                    color: 'text-red-400' },
+                    { label: 'Near Expiry',    value: stats.near_expiry,                     color: 'text-yellow-400' },
+                    { label: 'Expired',        value: stats.expired,                         color: 'text-orange-400' },
                 ].map(s => (
                     <div key={s.label} className="bg-card border border-border rounded-xl p-4">
                         <div className="text-xs text-muted-foreground mb-1.5">{s.label}</div>
@@ -797,6 +816,8 @@ function AllProductsTab({ products, pagination, filters, stats, categories, bran
                         <option value="in_stock">In Stock</option>
                         <option value="low_stock">Low Stock</option>
                         <option value="out_of_stock">Out of Stock</option>
+                        <option value="near_expiry">Near Expiry</option>
+                        <option value="expired">Expired</option>
                     </select>
                     {isAdmin && branches.length > 0 && (
                         <select value={filterBranch} onChange={e => handleFilter('branch_id', e.target.value)}

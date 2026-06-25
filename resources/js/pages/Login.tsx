@@ -52,7 +52,7 @@ export default function Login({ errors: serverErrors, logo_url: propLogoUrl }: L
 
   return (
     <>
-      <Head title="EAJ POS || Login" />
+      <Head title="FND POS || Login" />
 
       <div className="min-h-screen flex items-center justify-center bg-muted/40 px-4 sm:px-6 lg:px-8 py-6">
         <Card className="w-full max-w-md shadow-2xl rounded-3xl overflow-hidden border border-border bg-card">
@@ -67,7 +67,7 @@ export default function Login({ errors: serverErrors, logo_url: propLogoUrl }: L
               <img
                 src={logo_url ?? "/uploads/ease-logo.png"}
                 alt="Logo"
-                className="h-28 w-auto object-contain drop-shadow-sm"
+                className="h-50 w-auto object-contain drop-shadow-sm"
               />
             </div>
 

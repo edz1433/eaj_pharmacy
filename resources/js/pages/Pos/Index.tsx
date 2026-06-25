@@ -3,16 +3,17 @@ import { lazy, Suspense, useState, useEffect, useRef, useCallback, useMemo } fro
 import { usePage, router } from "@inertiajs/react";
 import AdminLayout from "@/layouts/AdminLayout";
 import ReceiptTemplate, { fmtMoney, ReceiptData } from "./ReceiptTemplate";
+import { QRCodeSVG } from "qrcode.react";
 import { routes } from "@/routes";
 import { cn } from "@/lib/utils";
 import {
     Search, X, Plus, Minus, Trash2, ShoppingCart, Tag,
     CreditCard, Banknote, Smartphone, CheckCircle2,
-    AlertTriangle, Package, History, ScanLine,
+    AlertTriangle, Package, History, ScanLine, Printer, QrCode,
     RefreshCw, Zap, User, ChevronDown, Wallet, CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Product, CartItem, Category, TableOrder, DiningTable, ActivePromo } from "./posTypes";
+import type { Product, CartItem, Category, TableOrder, DiningTable, ActivePromo, QueuedOrder } from "./posTypes";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Session  { id: number; opening_cash: number; opened_at: string; status: string; }
@@ -24,6 +25,7 @@ interface PageProps {
         default_payment: string; vat_enabled: boolean;
         vat_rate: number; vat_inclusive: boolean; require_cash_session: boolean;
         enable_installments: boolean;
+        hide_product_names_on_receipt: boolean;
     } | null;
     app: { currency: string };
     products: Product[];
@@ -623,10 +625,62 @@ function SaleSuccessModal({ receipt, currency, installmentPlanId, onNewSale }: {
 }
 
 // ─── CartPanel ────────────────────────────────────────────────────────────────
-function CartPanel({ cart, subtotal, itemCount, currency, error, onUpdateQty, onRemove, onClear, onCharge }: {
+function QueuedOrderModal({ order, currency, onClose }: {
+    order: QueuedOrder; currency: string; onClose: () => void;
+}) {
+    return (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-card border border-border rounded-t-2xl sm:rounded-2xl w-full sm:max-w-sm shadow-2xl flex flex-col max-h-[92vh]">
+                <div className="flex items-center gap-3 px-5 py-4 border-b border-border shrink-0 print:hidden">
+                    <div className="p-1.5 rounded-full bg-primary/10"><QrCode className="h-5 w-5 text-primary" /></div>
+                    <div className="min-w-0 flex-1">
+                        <p className="font-bold text-foreground">Order listed</p>
+                        <p className="text-xs text-muted-foreground font-mono">{order.ticket_number}</p>
+                    </div>
+                    <button onClick={onClose} className="p-1 rounded-md hover:bg-muted text-muted-foreground"><X className="h-4 w-4" /></button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-5">
+                    <div className="mx-auto w-[280px] bg-white text-black p-5 rounded-sm print:w-full print:p-0">
+                        <div className="text-center border-b border-dashed border-black/40 pb-3">
+                            <p className="text-lg font-black">ORDER TICKET</p>
+                            <p className="font-mono text-sm">{order.ticket_number}</p>
+                            {order.customer_name && <p className="text-sm mt-1">{order.customer_name}</p>}
+                        </div>
+                        <div className="flex justify-center py-4">
+                            <QRCodeSVG value={order.qr_token} size={150} level="M" />
+                        </div>
+                        <p className="text-center font-mono text-xs tracking-widest">{order.qr_token}</p>
+                        <div className="my-3 border-y border-dashed border-black/40 py-2 space-y-1">
+                            {order.items.map((item, index) => (
+                                <div key={`${item.product_id}-${item.variant_id ?? "base"}-${index}`} className="flex gap-2 text-xs">
+                                    <span className="w-6 text-right">{item.quantity}x</span>
+                                    <span className="flex-1">{item.product_name}{item.variant_name ? ` (${item.variant_name})` : ""}</span>
+                                    <span>{fmtMoney(item.total, currency)}</span>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex justify-between text-sm font-black">
+                            <span>Total</span>
+                            <span>{fmtMoney(order.total, currency)}</span>
+                        </div>
+                        <p className="mt-3 text-center text-[10px] uppercase tracking-wide">Present this to the main cashier</p>
+                    </div>
+                </div>
+                <div className="px-4 pb-5 pt-3 border-t border-border shrink-0 print:hidden grid grid-cols-2 gap-2">
+                    <Button variant="outline" className="h-11 font-bold" onClick={onClose}>Done</Button>
+                    <Button className="h-11 font-bold gap-2" onClick={() => window.print()}>
+                        <Printer className="h-4 w-4" />Print
+                    </Button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function CartPanel({ cart, subtotal, itemCount, currency, error, canCharge, onUpdateQty, onRemove, onClear, onCharge, onQueue }: {
     cart: CartItem[]; subtotal: number; itemCount: number; currency: string;
-    error: string | null; onUpdateQty: (key: string, d: number) => void;
-    onRemove: (key: string) => void; onClear: () => void; onCharge: () => void;
+    error: string | null; canCharge: boolean; onUpdateQty: (key: string, d: number) => void;
+    onRemove: (key: string) => void; onClear: () => void; onCharge: () => void; onQueue: () => void;
 }) {
     return (
         <div className="flex flex-col bg-card h-full">
@@ -696,10 +750,14 @@ function CartPanel({ cart, subtotal, itemCount, currency, error, onUpdateQty, on
                             <p className="text-2xl font-bold tabular-nums text-foreground">{fmtMoney(subtotal, currency)}</p>
                         </div>
                     </div>
-                    <Button className="w-full h-12 text-base font-bold gap-2" onClick={onCharge}>
-                        <Zap className="h-4 w-4" />Charge
-                        <span className="text-xs opacity-60 ml-auto font-normal">F9</span>
-                    </Button>
+                    <div className="grid grid-cols-2 gap-2">
+                        <Button variant="outline" className="h-12 text-sm font-bold gap-2" onClick={onQueue}>
+                            <QrCode className="h-4 w-4" />Print QR
+                        </Button>
+                        <Button className="h-12 text-sm font-bold gap-2" onClick={onCharge} disabled={!canCharge}>
+                            <Zap className="h-4 w-4" />Charge
+                        </Button>
+                    </div>
                     {error && (
                         <div className="flex items-center gap-2 p-2.5 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs">
                             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />{error}
@@ -725,6 +783,8 @@ export default function PosIndex() {
     const [activeCat,          setActiveCat]          = useState<number | null>(null);
     const [showPayment,        setShowPayment]        = useState(false);
     const [receipt,            setReceipt]            = useState<ReceiptData | null>(null);
+    const [queuedOrder,        setQueuedOrder]        = useState<QueuedOrder | null>(null);
+    const [activeQueuedOrder,  setActiveQueuedOrder]  = useState<QueuedOrder | null>(null);
     const [installmentPlanId,  setInstallmentPlanId]  = useState<number | null>(null);
     const [loading,            setLoading]            = useState(false);
     const [error,              setError]              = useState<string | null>(null);
@@ -791,9 +851,9 @@ export default function PosIndex() {
     }, []);
 
     const handleProductClick = useCallback((p: Product) => {
-        if (sessionRequired && !session) return; // blocked — no open session
         const isBundleMTO = p.product_type === 'bundle' || p.product_type === 'made_to_order';
         if (!isBundleMTO && p.stock <= 0) return;
+        if (p.is_expired) { setError("This product is expired and cannot be sold."); return; }
         if (p.has_variants && p.variants.filter(v => v.is_available).length > 0) {
             setVariantFor(p);
             return;
@@ -802,6 +862,37 @@ export default function PosIndex() {
         setSearch("");
         refocus();
     }, [addItem, refocus]);
+
+    const loadQueuedOrder = useCallback(async (token: string) => {
+        try {
+            const res = await fetch(`/pos/queued-orders/${encodeURIComponent(token)}`, {
+                headers: { "Accept": "application/json" },
+            });
+            if (!res.ok) return false;
+            const data = await res.json();
+            const order = data.order as QueuedOrder;
+            setActiveQueuedOrder(order);
+            setCart(order.items.map(item => ({
+                key: `${item.product_id}-${item.variant_id ?? "base"}`,
+                product_id: item.product_id,
+                variant_id: item.variant_id,
+                name: item.product_name,
+                variant_name: item.variant_name,
+                price: item.price,
+                qty: item.quantity,
+                stock: 999,
+                product_type: "standard",
+                bundle_items: null,
+                recipe_items: null,
+            })));
+            setError(null);
+            setSearch("");
+            refocus(50);
+            return true;
+        } catch {
+            return false;
+        }
+    }, [refocus]);
 
     // Combined search + instant barcode: if the current value exactly matches a barcode, add it
     const handleSearchOrScan = useCallback((value: string) => {
@@ -812,8 +903,10 @@ export default function PosIndex() {
         if (exact) {
             handleProductClick(exact);
             setSearch("");
+            return;
         }
-    }, [products, handleProductClick]);
+        if (/^[A-Z0-9]{8,20}$/i.test(code)) void loadQueuedOrder(code.toUpperCase());
+    }, [products, handleProductClick, loadQueuedOrder]);
 
     // Enter key: 1) exact barcode match, 2) exact name match, 3) single filtered result
     const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -833,7 +926,8 @@ export default function PosIndex() {
 
         // Priority 3: only one result in the filtered list → treat as unambiguous
         if (filtered.length === 1) { handleProductClick(filtered[0]); setSearch(""); }
-    }, [search, products, filtered, handleProductClick]);
+        else if (/^[A-Z0-9]{8,20}$/i.test(code)) void loadQueuedOrder(code.toUpperCase());
+    }, [search, products, filtered, handleProductClick, loadQueuedOrder]);
 
     const updateQty    = (key: string, delta: number) =>
         setCart(prev => prev.flatMap(i => {
@@ -846,6 +940,32 @@ export default function PosIndex() {
 
     const removeItem = (key: string) => setCart(prev => prev.filter(i => i.key !== key));
     const clearCart  = () => setCart([]);
+
+    const handleQueue = () => {
+        if (!cart.length) return;
+        setLoading(true); setError(null);
+        router.post("/pos/queue", {
+            items: cart.map(i => ({ id: i.product_id, qty: i.qty, variant_id: i.variant_id })),
+        }, {
+            preserveScroll: true,
+            onSuccess: page => {
+                const flash = (page.props as any).flash ?? {};
+                if (!flash.queued_order) {
+                    setError(flash.errors?.error ?? "Unable to print QR ticket.");
+                    setLoading(false);
+                    return;
+                }
+                setQueuedOrder(flash.queued_order as QueuedOrder);
+                setActiveQueuedOrder(null);
+                setCart([]);
+                setLoading(false);
+            },
+            onError: errors => {
+                setError(Object.values(errors)[0] as string ?? "Unable to print QR ticket.");
+                setLoading(false);
+            },
+        });
+    };
 
     const handleConfirm = (payData: {
         payment_method: PayMethod; payment_amount: number; customer_name: string;
@@ -860,11 +980,12 @@ export default function PosIndex() {
             items:            cart.map(i => ({ id: i.product_id, qty: i.qty, variant_id: i.variant_id })),
             payment_method:   payData.payment_method,
             payment_amount:   payData.payment_amount,
-            customer_name:    payData.customer_name || null,
+            customer_name:    payData.customer_name || activeQueuedOrder?.customer_name || null,
             discount_percent: payData.discount_percent,
             promo_id:         payData.promo_id ?? null,
             cash_session_id:  session?.id ?? null,
             table_order_id:   activeTableOrderId ?? null,
+            queued_order_id:  activeQueuedOrder?.id ?? null,
             // Financing/installment fields (sent only when method = installment)
             installment_provider:       payData.installment_provider ?? null,
             installment_reference:      payData.installment_reference ?? null,
@@ -904,10 +1025,12 @@ export default function PosIndex() {
                     branch_name:     branch?.name,
                     table_label:     activeOrder?.label ?? null,
                     business_type:   branch?.business_type,
+                    hide_product_names: r.hide_product_names ?? settings?.hide_product_names_on_receipt ?? false,
                     items:           cart.map(i => ({ product_name: i.name, variant_name: i.variant_name, quantity: i.qty, price: i.price })),
                 });
                 setShowPayment(false);
                 setActiveTableOrderId(null);
+                setActiveQueuedOrder(null);
                 setCart([]);
                 setLoading(false);
             },
@@ -957,9 +1080,17 @@ export default function PosIndex() {
     // ── Session guard ─────────────────────────────────────────────────────────
     const sessionRequired = settings?.require_cash_session ?? true;
     const sessionBlocked  = sessionRequired && !session;
+    const startCharge = () => {
+        if (sessionBlocked) {
+            setError("This station has no open cash session. Print a QR ticket for the main cashier instead.");
+            return;
+        }
+        setError(null);
+        setShowPayment(true);
+    };
 
     // ── No-session overlay — shown on top of any layout ───────────────────────
-    const noSessionOverlay = sessionBlocked ? (
+    const noSessionOverlay = false && sessionBlocked ? (
         <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-background/95 backdrop-blur-sm">
             <div className="flex flex-col items-center gap-4 p-8 rounded-2xl border border-border bg-card shadow-2xl max-w-sm w-full mx-4 text-center">
                 <div className="h-14 w-14 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
@@ -1022,7 +1153,7 @@ export default function PosIndex() {
                 <div className="flex-1 min-h-0 overflow-hidden">
                     <Suspense fallback={<LayoutSpinner />}>
                         <KioskLayout filtered={filtered} cart={cart} currency={currency} onProductClick={handleProductClick}
-                            onCharge={() => { setError(null); setShowPayment(true); }}
+                            onCharge={startCharge}
                             subtotal={subtotal} itemCount={itemCount} onClear={clearCart} />
                     </Suspense>
                 </div>
@@ -1040,6 +1171,7 @@ export default function PosIndex() {
                         loading={loading} serverError={error} />
                 )}
                 {receipt && <SaleSuccessModal receipt={receipt} currency={currency} installmentPlanId={installmentPlanId} onNewSale={() => { setReceipt(null); setInstallmentPlanId(null); refocus(100); }} />}
+                {queuedOrder && <QueuedOrderModal order={queuedOrder} currency={currency} onClose={() => { setQueuedOrder(null); refocus(100); }} />}
             </div>
         );
     }
@@ -1063,7 +1195,7 @@ export default function PosIndex() {
                     <div className="flex-1 min-h-0 overflow-hidden">
                         <Suspense fallback={<LayoutSpinner />}>
                             <MobileLayout filtered={filtered} cart={cart} currency={currency} onProductClick={handleProductClick}
-                                onCharge={() => { setError(null); setShowPayment(true); }}
+                                onCharge={startCharge}
                                 subtotal={subtotal} itemCount={itemCount} onClear={clearCart}
                                 onUpdateQty={updateQty} onRemove={removeItem} />
                         </Suspense>
@@ -1083,6 +1215,7 @@ export default function PosIndex() {
                         loading={loading} serverError={error} />
                 )}
                 {receipt && <SaleSuccessModal receipt={receipt} currency={currency} installmentPlanId={installmentPlanId} onNewSale={() => { setReceipt(null); setInstallmentPlanId(null); refocus(100); }} />}
+                {queuedOrder && <QueuedOrderModal order={queuedOrder} currency={currency} onClose={() => { setQueuedOrder(null); refocus(100); }} />}
             </AdminLayout>
         );
     }
@@ -1147,8 +1280,9 @@ export default function PosIndex() {
                     {/* Cart sidebar */}
                     <div className="shrink-0 flex flex-col border-l border-border w-72 lg:w-80 xl:w-96">
                         <CartPanel cart={cart} subtotal={subtotal} itemCount={itemCount} currency={currency} error={error}
+                            canCharge={!sessionBlocked}
                             onUpdateQty={updateQty} onRemove={removeItem} onClear={clearCart}
-                            onCharge={() => { setError(null); setShowPayment(true); }} />
+                            onCharge={startCharge} onQueue={handleQueue} />
                     </div>
                 </div>
             </div>
@@ -1166,6 +1300,7 @@ export default function PosIndex() {
                     loading={loading} />
             )}
             {receipt && <SaleSuccessModal receipt={receipt} currency={currency} installmentPlanId={installmentPlanId} onNewSale={() => { setReceipt(null); setInstallmentPlanId(null); refocus(100); }} />}
+            {queuedOrder && <QueuedOrderModal order={queuedOrder} currency={currency} onClose={() => { setQueuedOrder(null); refocus(100); }} />}
         </AdminLayout>
     );
 }

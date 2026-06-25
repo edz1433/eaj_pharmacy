@@ -33,6 +33,7 @@ export interface ReceiptData {
     // Business-type & dine-in info
     table_label?: string | null;
     business_type?: string;
+    hide_product_names?: boolean;
 }
 
 interface Props {
@@ -76,6 +77,8 @@ export default function ReceiptTemplate({ sale, currency = "₱", showActions = 
     const isVoided = sale.status === "voided";
     const isDineIn = !!sale.table_label;
     const footer   = businessFooter[sale.business_type ?? ""] ?? "Thank you for your purchase!";
+    const itemLabel = (item: ReceiptSaleItem, index: number) =>
+        sale.hide_product_names ? `Pharmacy Item ${index + 1}` : `${item.product_name}${item.variant_name ? ` (${item.variant_name})` : ""}`;
 
     // ── Print ──────────────────────────────────────────────────────
     const handlePrint = () => {
@@ -139,8 +142,8 @@ export default function ReceiptTemplate({ sale, currency = "₱", showActions = 
         if (sale.customer_name) lines.push(`Customer: ${sale.customer_name}`);
         if (isDineIn)           lines.push(`Table: ${sale.table_label}`);
         lines.push("--------------------------------");
-        sale.items.forEach(i => {
-            lines.push(`${i.product_name}${i.variant_name ? ` (${i.variant_name})` : ""}`);
+        sale.items.forEach((i, index) => {
+            lines.push(itemLabel(i, index));
             lines.push(pad(`  ${i.quantity} x ${fmtMoney(i.price, currency)}`, fmtMoney(i.price * i.quantity, currency)));
         });
         lines.push("--------------------------------");
@@ -223,8 +226,8 @@ export default function ReceiptTemplate({ sale, currency = "₱", showActions = 
                     {sale.items.map((item, i) => (
                         <div key={i}>
                             <p className="item-name font-medium text-foreground leading-snug">
-                                {item.product_name}
-                                {item.variant_name && (
+                                {sale.hide_product_names ? `Pharmacy Item ${i + 1}` : item.product_name}
+                                {!sale.hide_product_names && item.variant_name && (
                                     <span className="text-muted-foreground font-normal"> ({item.variant_name})</span>
                                 )}
                             </p>

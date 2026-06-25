@@ -94,6 +94,10 @@ class ProductController extends Controller
                 $query->whereHas('stocks', fn($q) => $q->where('stock', '>', 0)->where('stock', '<=', 5));
             } elseif ($status === 'in_stock') {
                 $query->whereHas('stocks', fn($q) => $q->where('stock', '>', 5));
+            } elseif ($status === 'expired') {
+                $query->whereHas('stocks', fn($q) => $q->whereDate('expiry_date', '<', now()));
+            } elseif ($status === 'near_expiry') {
+                $query->whereHas('stocks', fn($q) => $q->whereDate('expiry_date', '>=', now())->whereDate('expiry_date', '<=', now()->addDays(30)));
             }
         }
 
@@ -160,6 +164,7 @@ class ProductController extends Controller
                             'status'          => $s->stock_status,
                             'expiry_date'     => $s->expiry_date?->format('Y-m-d'),
                             'batch_number'    => $s->batch_number,
+                            'days_before_expiry_warning' => $s->days_before_expiry_warning,
                         ];
                     })->values(),
 
@@ -198,6 +203,16 @@ class ProductController extends Controller
         $outOfStock = (clone $baseStatsQuery)
             ->whereDoesntHave('stocks', function ($q) use ($effectiveBranchForStats) {
                 $q->where('stock', '>', 0);
+                if ($effectiveBranchForStats) $q->where('branch_id', $effectiveBranchForStats);
+            })->count();
+        $expired = (clone $baseStatsQuery)
+            ->whereHas('stocks', function ($q) use ($effectiveBranchForStats) {
+                $q->whereDate('expiry_date', '<', now());
+                if ($effectiveBranchForStats) $q->where('branch_id', $effectiveBranchForStats);
+            })->count();
+        $nearExpiry = (clone $baseStatsQuery)
+            ->whereHas('stocks', function ($q) use ($effectiveBranchForStats) {
+                $q->whereDate('expiry_date', '>=', now())->whereDate('expiry_date', '<=', now()->addDays(30));
                 if ($effectiveBranchForStats) $q->where('branch_id', $effectiveBranchForStats);
             })->count();
 
@@ -345,6 +360,7 @@ class ProductController extends Controller
                 'status'          => $s->stock_status,
                 'expiry_date'     => $s->expiry_date?->format('Y-m-d'),
                 'batch_number'    => $s->batch_number,
+                'days_before_expiry_warning' => $s->days_before_expiry_warning,
             ];
         })->values();
 
@@ -390,6 +406,8 @@ class ProductController extends Controller
                 'total_units'    => (int) $totalUnits,
                 'low_stock'      => $lowStock,
                 'out_of_stock'   => $outOfStock,
+                'expired'        => $expired,
+                'near_expiry'    => $nearExpiry,
             ],
 
             // ── Other tabs (full lists, non-paginated) ────────────────────────
@@ -746,6 +764,9 @@ class ProductController extends Controller
             'stock'     => ['required', 'integer', 'min:0'],
             'capital'   => ['required', 'numeric', 'min:0'],
             'markup'    => ['required', 'numeric', 'min:0', 'max:500'],
+            'expiry_date' => ['nullable', 'date'],
+            'batch_number' => ['nullable', 'string', 'max:100'],
+            'days_before_expiry_warning' => ['nullable', 'integer', 'min:0', 'max:3650'],
         ]);
 
         if (! $isAdmin && $validated['branch_id'] != $user->branch_id) {
@@ -754,7 +775,15 @@ class ProductController extends Controller
 
         ProductStock::updateOrCreate(
             ['product_id' => $product->id, 'branch_id' => $validated['branch_id']],
-            ['stock' => $validated['stock'], 'capital' => $validated['capital'], 'markup' => $validated['markup'], 'updated_by' => auth()->id()]
+            [
+                'stock' => $validated['stock'],
+                'capital' => $validated['capital'],
+                'markup' => $validated['markup'],
+                'expiry_date' => $validated['expiry_date'] ?? null,
+                'batch_number' => $validated['batch_number'] ?? null,
+                'days_before_expiry_warning' => $validated['days_before_expiry_warning'] ?? 30,
+                'updated_by' => auth()->id(),
+            ]
         );
 
         ActivityLog::create([
@@ -768,6 +797,9 @@ class ProductController extends Controller
                 'stock'        => $validated['stock'],
                 'capital'      => $validated['capital'],
                 'markup'       => $validated['markup'],
+                'expiry_date'  => $validated['expiry_date'] ?? null,
+                'batch_number' => $validated['batch_number'] ?? null,
+                'days_before_expiry_warning' => $validated['days_before_expiry_warning'] ?? 30,
                 'ip'           => $request->ip(),
             ],
         ]);

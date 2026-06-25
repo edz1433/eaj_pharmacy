@@ -58,6 +58,8 @@ Route::middleware('auth')->group(function () {
     Route::middleware('access:2')->prefix('pos')->name('pos.')->controller(PosController::class)->group(function () {
         Route::get('/', 'index')->name('index');
         Route::post('/', 'store')->name('store');
+        Route::post('/queue', 'queueOrder')->name('queue');
+        Route::get('/queued-orders/{token}', 'queuedOrder')->name('queued-orders.show');
         Route::get('/{sale}/edit', 'edit')->name('edit');
         Route::put('/{sale}', 'update')->name('update');
         Route::post('/{sale}/void', 'void')->name('void');
